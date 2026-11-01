@@ -64,6 +64,7 @@ namespace Botcraft
 
     private:
         void Physics();
+        void SendTeleportResponse(const int id);
 
         /// @brief Follow minecraft physics related flow in LocalPlayer tick function
         void PhysicsTick();

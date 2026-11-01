@@ -193,7 +193,7 @@ namespace Botcraft
         // Sending it now causes huge slow down of the tests (lag when
         // botcraft_0 is teleported to place structure block/signs).
         // I'm not sure what causes this behaviour (server side?)
-        teleport_id = packet.GetId_();
+        SendTeleportResponse(packet.GetId_());
     }
 
 #if PROTOCOL_VERSION > 764 /* > 1.20.2 */
@@ -266,8 +266,8 @@ namespace Botcraft
                         updated_position_packet->SetOnGround(false);
 #if PROTOCOL_VERSION > 767 /* > 1.21.1 */
                         updated_position_packet->SetHorizontalCollision(false);
-#endif
-
+#endif                  
+                        //LOG_INFO("TELEPORTING id=" << teleport_id.value() << " pos=" << player->position << " on_ground=" << player->on_ground << " speed_y=" << player->speed.y);
                         std::shared_ptr<ServerboundAcceptTeleportationPacket> accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
                         accept_tp_packet->SetId_(teleport_id.value());
 
@@ -304,6 +304,44 @@ namespace Botcraft
             // Wait for end of tick
             Utilities::SleepUntil(end);
         }
+    }
+
+    // PhysicsManager.cpp
+    void PhysicsManager::SendTeleportResponse(const int id)
+    {
+        #if PROTOCOL_VERSION < 777 /* < 26.3 */
+            auto updated_position_packet = std::make_shared<ServerboundMovePlayerPacketPosRot>();
+            updated_position_packet->SetX(player->position.x);
+            updated_position_packet->SetY(player->position.y);
+            updated_position_packet->SetZ(player->position.z);
+            updated_position_packet->SetYRot(player->yaw);
+            updated_position_packet->SetXRot(player->pitch);
+            updated_position_packet->SetOnGround(false);
+        #if PROTOCOL_VERSION > 767
+            updated_position_packet->SetHorizontalCollision(false);
+        #endif
+            auto accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
+            accept_tp_packet->SetId_(id);
+        #if PROTOCOL_VERSION < 768
+            network_manager->Send(accept_tp_packet);
+            network_manager->Send(updated_position_packet);
+        #elif PROTOCOL_VERSION < 769
+            network_manager->Send(updated_position_packet);
+            network_manager->Send(accept_tp_packet);
+        #else
+            network_manager->Send(accept_tp_packet);
+            network_manager->Send(updated_position_packet);
+        #endif
+        #else
+            auto accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
+            accept_tp_packet->SetId_(id);
+            accept_tp_packet->SetX(player->position.x);
+            accept_tp_packet->SetY(player->position.y);
+            accept_tp_packet->SetZ(player->position.z);
+            accept_tp_packet->SetYRot(player->yaw);
+            accept_tp_packet->SetXRot(player->pitch);
+            network_manager->Send(accept_tp_packet);
+        #endif
     }
 
     void PhysicsManager::PhysicsTick()
@@ -490,10 +528,10 @@ namespace Botcraft
                         player->SetDataPoseImpl(Pose::Swimming);
                     }
                 }
-#endif
-            } // Player::tick
-
+#endif      
             SendPosition();
+            //LOG_INFO("TICK y=" << player->position.y << " on_ground=" << player->on_ground << " speed_y=" << player->speed.y);
+            } // Player::tick
         }  // LocalPlayer::tick
 
         // Check for rocket boosting if currently in elytra flying mode
@@ -985,6 +1023,7 @@ namespace Botcraft
         // After 1.21.5 the ServerboundPlayerCommandPacket is not sent anymore
 #if PROTOCOL_VERSION < 771 /* < 1.21.6 */
         const bool shift_key_down = player->inputs.sneak;
+        //LOG_INFO("SendPosition: moved=" << has_moved << " rotated=" << has_rotated << " yaw=" << player->yaw << " prev_yaw=" << player->previous_yaw << " pitch=" << player->pitch << " prev_pitch=" << player->previous_pitch << " ground=" << player->on_ground);
         if (shift_key_down != player->previous_shift_key_down)
         {
             std::shared_ptr<ServerboundPlayerCommandPacket> player_command_packet = std::make_shared<ServerboundPlayerCommandPacket>();
@@ -1318,8 +1357,8 @@ namespace Botcraft
         // Move with elytra
         else if (player->GetDataSharedFlagsIdImpl(EntitySharedFlagsId::FallFlying))
         {
-            // sqrt(front_vector.x² + front_vector.z²) to follow vanilla code
-            // it's equal to cos(pitch) (as -90°<=pitch<=90°, cos(pitch) >= 0.0)
+            // sqrt(front_vector.xï¿½ + front_vector.zï¿½) to follow vanilla code
+            // it's equal to cos(pitch) (as -90ï¿½<=pitch<=90ï¿½, cos(pitch) >= 0.0)
             const double cos_pitch_from_length = std::sqrt(player->front_vector.x * player->front_vector.x + player->front_vector.z * player->front_vector.z);
             const double cos_pitch = std::cos(static_cast<double>(player->pitch * 0.017453292f /* PI/180 */));
             const double cos_pitch_sqr = cos_pitch * cos_pitch;
