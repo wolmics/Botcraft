@@ -165,11 +165,10 @@ namespace Botcraft
         local_player->previous_pitch = packet.GetRelatives() & (1 << 4) ? local_player->pitch + packet.GetChange().GetXRot() : packet.GetChange().GetXRot();
 #endif
 
-        // Defer sending the position update to the next physics tick
-        // Sending it now causes huge slow down of the tests (lag when
-        // botcraft_0 is teleported to place structure block/signs).
-        // I'm not sure what causes this behaviour (server side?)
-        local_player->pending_teleport_id = packet.GetId_();
+        // Reply immediately, on the network thread, so the Accept Teleportation
+        // is sent before any Pong that follows this packet (what a vanilla client does).
+        // Anticheats like Grim rely on this ordering.
+        SendTeleportResponse(local_player, packet.GetId_());
     }
 
 #if PROTOCOL_VERSION > 764 /* > 1.20.2 */
@@ -211,6 +210,47 @@ namespace Botcraft
     }
 #endif
 
+    void PhysicsManager::SendTeleportResponse(const std::shared_ptr<LocalPlayer>& local_player, const int id) const
+    {
+        // local_player->entity_mutex must be held by the caller
+        #if PROTOCOL_VERSION < 777 /* < 26.3 */
+                std::shared_ptr<ServerboundMovePlayerPacketPosRot> updated_position_packet = std::make_shared<ServerboundMovePlayerPacketPosRot>();
+                updated_position_packet->SetX(local_player->position.x);
+                updated_position_packet->SetY(local_player->position.y);
+                updated_position_packet->SetZ(local_player->position.z);
+                updated_position_packet->SetYRot(local_player->yaw);
+                updated_position_packet->SetXRot(local_player->pitch);
+                updated_position_packet->SetOnGround(false);
+        #if PROTOCOL_VERSION > 767 /* > 1.21.1 */
+                updated_position_packet->SetHorizontalCollision(false);
+        #endif
+
+                std::shared_ptr<ServerboundAcceptTeleportationPacket> accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
+                accept_tp_packet->SetId_(id);
+
+                // In 1.21.2/1.21.3 -> move player then accept TP, other versions -> Accept TP then move player
+        #if PROTOCOL_VERSION < 768 /* < 1.21.2 */
+                network_manager->Send(accept_tp_packet);
+                network_manager->Send(updated_position_packet);
+        #elif PROTOCOL_VERSION < 769 /* < 1.21.4 */
+                network_manager->Send(updated_position_packet);
+                network_manager->Send(accept_tp_packet);
+        #else
+                network_manager->Send(accept_tp_packet);
+                network_manager->Send(updated_position_packet);
+        #endif
+        #else
+                std::shared_ptr<ServerboundAcceptTeleportationPacket> accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
+                accept_tp_packet->SetId_(id);
+                accept_tp_packet->SetX(local_player->position.x);
+                accept_tp_packet->SetY(local_player->position.y);
+                accept_tp_packet->SetZ(local_player->position.z);
+                accept_tp_packet->SetYRot(local_player->yaw);
+                accept_tp_packet->SetXRot(local_player->pitch);
+                network_manager->Send(accept_tp_packet);
+        #endif
+    }
+
     void PhysicsManager::Physics()
     {
         Logger::GetInstance().RegisterThread("Physics - " + network_manager->GetMyName());
@@ -232,47 +272,6 @@ namespace Botcraft
                     std::scoped_lock<std::shared_mutex> lock(player->entity_mutex);
                     if (!std::isnan(player->position.y))
                     {
-                        // Send player updated position with onground set to false to mimic vanilla client behaviour
-                        if (player->pending_teleport_id.has_value())
-                        {
-#if PROTOCOL_VERSION < 777 /* < 26.3 */
-                            std::shared_ptr<ServerboundMovePlayerPacketPosRot> updated_position_packet = std::make_shared<ServerboundMovePlayerPacketPosRot>();
-                            updated_position_packet->SetX(player->position.x);
-                            updated_position_packet->SetY(player->position.y);
-                            updated_position_packet->SetZ(player->position.z);
-                            updated_position_packet->SetYRot(player->yaw);
-                            updated_position_packet->SetXRot(player->pitch);
-                            updated_position_packet->SetOnGround(false);
-#if PROTOCOL_VERSION > 767 /* > 1.21.1 */
-                            updated_position_packet->SetHorizontalCollision(false);
-#endif
-
-                            std::shared_ptr<ServerboundAcceptTeleportationPacket> accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
-                            accept_tp_packet->SetId_(player->pending_teleport_id.value());
-
-                            // In 1.21.2/1.21.3 -> move player then accept TP, other versions -> Accept TP then move player
-#if PROTOCOL_VERSION < 768 /* < 1.21.2 */
-                            network_manager->Send(accept_tp_packet);
-                            network_manager->Send(updated_position_packet);
-#elif PROTOCOL_VERSION < 769 /* < 1.21.4 */
-                            network_manager->Send(updated_position_packet);
-                            network_manager->Send(accept_tp_packet);
-#else
-                            network_manager->Send(accept_tp_packet);
-                            network_manager->Send(updated_position_packet);
-#endif
-#else
-                            std::shared_ptr<ServerboundAcceptTeleportationPacket> accept_tp_packet = std::make_shared<ServerboundAcceptTeleportationPacket>();
-                            accept_tp_packet->SetId_(player->pending_teleport_id.value());
-                            accept_tp_packet->SetX(player->position.x);
-                            accept_tp_packet->SetY(player->position.y);
-                            accept_tp_packet->SetZ(player->position.z);
-                            accept_tp_packet->SetYRot(player->yaw);
-                            accept_tp_packet->SetXRot(player->pitch);
-                            network_manager->Send(accept_tp_packet);
-#endif
-                            player->pending_teleport_id = std::nullopt;
-                        }
                         PhysicsTick();
                     }
                 }
@@ -1270,8 +1269,8 @@ namespace Botcraft
         // Move with elytra
         else if (player->GetDataSharedFlagsIdImpl(EntitySharedFlagsId::FallFlying))
         {
-            // sqrt(front_vector.x² + front_vector.z²) to follow vanilla code
-            // it's equal to cos(pitch) (as -90°<=pitch<=90°, cos(pitch) >= 0.0)
+            // sqrt(front_vector.xï¿½ + front_vector.zï¿½) to follow vanilla code
+            // it's equal to cos(pitch) (as -90ï¿½<=pitch<=90ï¿½, cos(pitch) >= 0.0)
             const Vector3<double> front_vector = player->GetFrontVectorImpl();
             const double cos_pitch_from_length = std::sqrt(front_vector.x * front_vector.x + front_vector.z * front_vector.z);
             const double cos_pitch = std::cos(static_cast<double>(player->pitch * 0.017453292f /* PI/180 */));

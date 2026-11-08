@@ -69,6 +69,13 @@ namespace Botcraft
         /// @brief Send position/rotation/on_ground to server
         void SendPosition();
 
+        /// @brief Reply to a server teleport (Accept Teleportation + position).
+        /// Called directly from the packet handler so the reply is sent in the same
+        /// order as a vanilla client would, i.e. before any later Pong.
+        /// @param local_player The player, whose entity_mutex must already be held by the caller
+        /// @param id Teleport id sent by the server
+        void SendTeleportResponse(const std::shared_ptr<LocalPlayer>& local_player, const int id) const;
+
         /// @brief Check collisions of an AABB with a given movement
         /// @param aabb AABB to move
         /// @param movement Movement vector to apply to AABB
