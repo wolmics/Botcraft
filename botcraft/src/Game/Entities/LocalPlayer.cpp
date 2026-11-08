@@ -353,10 +353,18 @@ namespace Botcraft
         direction.Normalize();
         const float new_pitch = static_cast<float>(-std::asin(direction.y) * 57.29577951308232 /* 180/PI */);
         float new_yaw = static_cast<float>(-std::atan2(direction.x, direction.z) * 57.29577951308232 /* 180/PI */);
-        if (new_yaw < 0)
+        // Vanilla never wraps yaw to [0, 360): pick the angle equivalent to new_yaw closest to the current yaw
+        float delta_yaw = std::fmod(new_yaw - yaw, 360.0f);
+        if (delta_yaw > 180.0f)
         {
-            new_yaw += 360.0f;
+            delta_yaw -= 360.0f;
         }
+        else if (delta_yaw < -180.0f)
+        {
+            delta_yaw += 360.0f;
+        }
+        new_yaw = yaw + delta_yaw;
+
         if (new_yaw != yaw ||
             (set_pitch && new_pitch != pitch))
         {
